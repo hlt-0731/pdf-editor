@@ -85,6 +85,9 @@ const canvas = document.getElementById('pdf-canvas') as HTMLCanvasElement;
 const fileInput = document.getElementById('file-input') as HTMLInputElement;
 const btnOpen = document.getElementById('btn-open') as HTMLButtonElement;
 const btnSave = document.getElementById('btn-save') as HTMLButtonElement;
+const btnInfo = document.getElementById('btn-info') as HTMLButtonElement;
+const metadataModal = document.getElementById('metadata-modal') as HTMLElement;
+const metadataContent = document.getElementById('metadata-content') as HTMLElement;
 const btnZoomOut = document.getElementById('btn-zoom-out') as HTMLButtonElement;
 const btnZoomIn = document.getElementById('btn-zoom-in') as HTMLButtonElement;
 const btnPrevPage = document.getElementById('btn-prev-page') as HTMLButtonElement;
@@ -145,6 +148,7 @@ async function loadPDF(arrayBuffer: ArrayBuffer): Promise<void> {
     updatePageInfo();
 
     btnSave.disabled = false;
+    btnInfo.disabled = false;
     btnPrevPage.disabled = state.currentPageIndex === 0;
     btnNextPage.disabled = state.currentPageIndex === state.pages.length - 1;
   } catch (error) {
@@ -664,11 +668,256 @@ function downloadPdf(data: Uint8Array): void {
 }
 
 // ---------------------------------------------------------------------------
+// Metadata Panel
+// ---------------------------------------------------------------------------
+
+/** Editable metadata fields — PDF Info dictionary keys + Japanese labels. */
+const METADATA_FIELDS: Array<{ key: string; label: string; editable: boolean }> = [
+  { key: 'Title',    label: 'タイトル',            editable: true },
+  { key: 'Author',   label: '作成者',              editable: true },
+  { key: 'Subject',  label: '件名',                editable: true },
+  { key: 'Keywords', label: 'キーワード',          editable: true },
+  { key: 'Creator',  label: '作成アプリケーション', editable: true },
+  { key: 'Producer', label: 'PDF生成ツール',        editable: true },
+  { key: 'CreationDate', label: '作成日時',         editable: false },
+  { key: 'ModDate',      label: '更新日時',         editable: false },
+  { key: 'PDFFormatVersion', label: 'PDFバージョン', editable: false },
+];
+
+function parsePdfDate(dateStr: string): string {
+  const match = dateStr.match(/D:(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/);
+  if (match) {
+    const [, y, m, d, h, min, s] = match;
+    return `${y}/${m}/${d} ${h}:${min}:${s}`;
+  }
+  return dateStr.replace(/^D:/, '');
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Escape a string for use inside a PDF literal string `(…)`. */
+function escapePdfString(str: string): string {
+  return str
+    .replace(/\\/g, '\\\\')
+    .replace(/\(/g, '\\(')
+    .replace(/\)/g, '\\)');
+}
+
+/** Convert a JS string to a PDF UTF-16BE literal string with BOM. */
+function toPdfUtf16String(str: string): string {
+  if (str.length === 0) return '()';
+  // Check if ASCII-only (no encoding needed)
+  let ascii = true;
+  for (let i = 0; i < str.length; i++) {
+    if (str.charCodeAt(i) > 127) { ascii = false; break; }
+  }
+  if (ascii) return `(${escapePdfString(str)})`;
+  // UTF-16BE with BOM
+  const codes: number[] = [0xFE, 0xFF]; // BOM
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i);
+    codes.push((code >> 8) & 0xFF);
+    codes.push(code & 0xFF);
+  }
+  const hex = codes.map(b => b.toString(16).padStart(2, '0')).join('');
+  return `<${hex}>`;
+}
+
+/** Build a serialized PDF Info dictionary from key-value pairs. */
+function buildInfoDictBytes(fields: Map<string, string>): Uint8Array {
+  let dict = '<< ';
+  for (const [key, value] of fields) {
+    if (value.length > 0) {
+      dict += `/${key} ${toPdfUtf16String(value)} `;
+    }
+  }
+  // Add ModDate as current time
+  const now = new Date();
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  const dateStr = `D:${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  dict += `/ModDate (${dateStr}) `;
+  dict += '>>';
+  return new TextEncoder().encode(dict);
+}
+
+/**
+ * Get the Info dictionary's object number from the XRef trailer.
+ * If no Info dict exists, returns the next available object number
+ * (so we can create a new one).
+ */
+function getInfoObjNum(): { objNum: number; isNew: boolean } {
+  if (!state.buffer) return { objNum: 1, isNew: true };
+
+  const reader = new ByteStreamReader(state.buffer);
+  const xref = new XRefParser().parse(reader);
+
+  if (xref.trailer.info) {
+    return { objNum: xref.trailer.info.objNum, isNew: false };
+  }
+  // Create new object — use trailer.size as the next available objNum
+  return { objNum: xref.trailer.size, isNew: true };
+}
+
+/** Apply metadata changes via incremental PDF update. */
+async function applyMetadataEdit(fields: Map<string, string>): Promise<void> {
+  if (!state.buffer) return;
+
+  const { objNum } = getInfoObjNum();
+  const infoData = buildInfoDictBytes(fields);
+
+  const modifiedObjects: ModifiedObject[] = [{
+    objNum,
+    genNum: 0,
+    data: infoData,
+  }];
+
+  try {
+    const reader = new ByteStreamReader(state.buffer);
+    const xref = new XRefParser().parse(reader);
+
+    // Ensure the trailer references the Info dictionary (may be new)
+    xref.trailer.info = { objNum, genNum: 0 };
+
+    const newPdf = buildIncrementalUpdate(state.buffer, modifiedObjects, xref);
+
+    state.buffer = newPdf;
+    state.modified = true;
+    btnSave.disabled = false;
+
+    // Reload PDF.js document
+    if (state.pdfDoc) state.pdfDoc.destroy();
+    state.pdfDoc = await pdfjsLib.getDocument({ data: newPdf.slice() }).promise;
+
+    // Re-parse
+    const newReader = new ByteStreamReader(newPdf);
+    const newXref = new XRefParser().parse(newReader);
+    state.resolver = new ObjectResolver(newReader, newXref);
+    state.pages = state.resolver.getPages();
+  } catch (error) {
+    console.error('Error updating metadata:', error);
+    alert(`メタデータ更新エラー: ${error instanceof Error ? error.message : 'Unknown'}`);
+  }
+}
+
+async function extractMetadata(): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+
+  if (state.pdfDoc) {
+    try {
+      const meta = await state.pdfDoc.getMetadata();
+      const info = meta.info as Record<string, unknown>;
+
+      for (const field of METADATA_FIELDS) {
+        const val = info[field.key];
+        if (val !== undefined && val !== null && val !== '') {
+          let displayVal = String(val);
+          if ((field.key === 'CreationDate' || field.key === 'ModDate') && typeof val === 'string') {
+            displayVal = parsePdfDate(val);
+          }
+          result.set(field.key, displayVal);
+        } else {
+          result.set(field.key, '');
+        }
+      }
+    } catch (e) {
+      console.warn('Could not get PDF.js metadata:', e);
+    }
+  }
+
+  return result;
+}
+
+function showMetadataModal(metadata: Map<string, string>): void {
+  let html = '<button class="metadata-close" id="btn-metadata-close">✕</button>';
+  html += '<h2>PDF メタデータ</h2>';
+
+  html += '<table>';
+  for (const field of METADATA_FIELDS) {
+    const value = metadata.get(field.key) ?? '';
+    const escaped = value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+    html += `<tr><th>${field.label}</th><td>`;
+    if (field.editable) {
+      html += `<input type="text" class="metadata-input" data-key="${field.key}" value="${escaped}" placeholder="（なし）" />`;
+    } else {
+      html += escaped || '<span class="metadata-empty">（なし）</span>';
+    }
+    html += '</td></tr>';
+  }
+  html += '</table>';
+
+  // File info (read-only)
+  html += '<table style="margin-top: 12px; border-top: 2px solid #45475a;">';
+  if (state.buffer) {
+    html += `<tr><th>ファイルサイズ</th><td>${formatFileSize(state.buffer.byteLength)}</td></tr>`;
+  }
+  if (state.pages.length > 0) {
+    html += `<tr><th>ページ数</th><td>${state.pages.length}</td></tr>`;
+  }
+  if (state.pageWidth > 0 && state.pageHeight > 0) {
+    html += `<tr><th>ページサイズ</th><td>${Math.round(state.pageWidth)} × ${Math.round(state.pageHeight)} pt</td></tr>`;
+  }
+  html += '</table>';
+
+  html += '<div style="margin-top: 16px; text-align: right;">';
+  html += '<button class="metadata-close" id="btn-metadata-save" style="background: #1a73e8; border-color: #1a73e8; margin-left: 8px;">保存</button>';
+  html += '</div>';
+
+  metadataContent.innerHTML = html;
+  metadataModal.classList.add('active');
+
+  document.getElementById('btn-metadata-close')?.addEventListener('click', () => {
+    metadataModal.classList.remove('active');
+  });
+
+  document.getElementById('btn-metadata-save')?.addEventListener('click', () => {
+    const inputs = metadataContent.querySelectorAll<HTMLInputElement>('.metadata-input');
+    const updated = new Map<string, string>();
+    for (const input of inputs) {
+      const key = input.dataset.key;
+      if (key) updated.set(key, input.value.trim());
+    }
+    // Preserve read-only fields from original
+    const creationDate = metadata.get('CreationDate');
+    if (creationDate) updated.set('CreationDate', creationDate);
+
+    void (async () => {
+      await applyMetadataEdit(updated);
+      metadataModal.classList.remove('active');
+      // Re-open to show updated values
+      const newMeta = await extractMetadata();
+      showMetadataModal(newMeta);
+    })();
+  });
+}
+
+btnInfo.addEventListener('click', () => {
+  void (async () => {
+    const metadata = await extractMetadata();
+    showMetadataModal(metadata);
+  })();
+});
+
+metadataModal.addEventListener('click', (event) => {
+  if (event.target === metadataModal) {
+    metadataModal.classList.remove('active');
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Keyboard Events
 // ---------------------------------------------------------------------------
 
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
+    if (metadataModal.classList.contains('active')) {
+      metadataModal.classList.remove('active');
+      return;
+    }
     if (inlineEditor.isEditing()) {
       inlineEditor.cancelEditing();
     } else {

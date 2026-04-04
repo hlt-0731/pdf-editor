@@ -12,6 +12,7 @@
         <button id="btn-open" title="ファイルを開く">Open PDF</button>
         <input type="file" id="file-input" accept=".pdf" hidden />
         <button id="btn-save" title="保存" disabled>Save PDF</button>
+        <button id="btn-info" title="メタデータ" disabled>Info</button>
       </div>
       <div class="toolbar-center">
         <button id="btn-zoom-out" title="縮小">-</button>
@@ -33,6 +34,9 @@
         <div id="interaction-layer"></div>
       </div>
     </main>
+    <div id="metadata-modal">
+      <div id="metadata-content"></div>
+    </div>
   </div>
   <script type="module" src="/src/main.ts"></script>
 </body>

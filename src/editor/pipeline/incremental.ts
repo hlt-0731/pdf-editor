@@ -164,7 +164,12 @@ export function buildXRefTable(
   // Trailer dictionary.
   writer.writeLine('trailer');
   const rootRef = `${trailer.root.objNum} ${trailer.root.genNum} R`;
-  writer.writeLine(`<< /Size ${newSize} /Root ${rootRef} /Prev ${prevXRefOffset} >>`);
+  let trailerDict = `<< /Size ${newSize} /Root ${rootRef} /Prev ${prevXRefOffset}`;
+  if (trailer.info) {
+    trailerDict += ` /Info ${trailer.info.objNum} ${trailer.info.genNum} R`;
+  }
+  trailerDict += ' >>';
+  writer.writeLine(trailerDict);
 
   return writer.toUint8Array();
 }
