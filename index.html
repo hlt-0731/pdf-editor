@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PDF Editor</title>
+</head>
+<body>
+  <div id="app">
+    <header id="toolbar">
+      <div class="toolbar-left">
+        <button id="btn-open" title="ファイルを開く">Open PDF</button>
+        <input type="file" id="file-input" accept=".pdf" hidden />
+        <button id="btn-save" title="保存" disabled>Save PDF</button>
+      </div>
+      <div class="toolbar-center">
+        <button id="btn-zoom-out" title="縮小">-</button>
+        <span id="zoom-level">150%</span>
+        <button id="btn-zoom-in" title="拡大">+</button>
+      </div>
+      <div class="toolbar-right">
+        <span id="page-info">Page - / -</span>
+        <button id="btn-prev-page" title="前のページ" disabled>&lt;</button>
+        <button id="btn-next-page" title="次のページ" disabled>&gt;</button>
+      </div>
+    </header>
+    <main id="editor-area">
+      <div id="drop-zone">
+        <p>PDFファイルをドラッグ&ドロップ<br>またはクリックして選択</p>
+      </div>
+      <div id="canvas-container" hidden>
+        <canvas id="pdf-canvas"></canvas>
+        <div id="interaction-layer"></div>
+      </div>
+    </main>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
