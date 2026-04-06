@@ -168,6 +168,14 @@ export function buildXRefTable(
   if (trailer.info) {
     trailerDict += ` /Info ${trailer.info.objNum} ${trailer.info.genNum} R`;
   }
+  if (trailer.encrypt) {
+    trailerDict += ` /Encrypt ${trailer.encrypt.objNum} ${trailer.encrypt.genNum} R`;
+  }
+  if (trailer.id) {
+    const hex0 = bytesToHex(trailer.id[0]);
+    const hex1 = bytesToHex(trailer.id[1]);
+    trailerDict += ` /ID [<${hex0}> <${hex1}>]`;
+  }
   trailerDict += ' >>';
   writer.writeLine(trailerDict);
 
@@ -209,6 +217,15 @@ function calcNewSize(
     }
   }
   return size;
+}
+
+/** Convert a byte array to a hex string. */
+function bytesToHex(bytes: Uint8Array): string {
+  let hex = '';
+  for (let i = 0; i < bytes.length; i++) {
+    hex += (bytes[i] ?? 0).toString(16).padStart(2, '0');
+  }
+  return hex;
 }
 
 /**

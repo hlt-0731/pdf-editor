@@ -41,6 +41,10 @@ export class InlineEditor {
   private currentBlock: TextBlock | null = null;
   private onComplete: ((result: EditResult) => void) | null = null;
 
+  // Canvas snapshot saved when editing starts — restored before each
+  // renderText() so neighbouring PDF content is never destroyed.
+  private canvasSnapshot: ImageData | null = null;
+
   // Cursor blink state
   private cursorBlinkTimer: number | null = null;
   private cursorVisible = true;
@@ -73,6 +77,16 @@ export class InlineEditor {
 
     this.currentBlock = block;
     this.onComplete = onComplete;
+
+    // Save a snapshot of the entire canvas so we can restore it before
+    // each renderText() — this prevents neighbouring content from being
+    // erased by the white clearing rectangle.
+    const ctx = this.canvas.getContext('2d');
+    if (ctx) {
+      this.canvasSnapshot = ctx.getImageData(
+        0, 0, this.canvas.width, this.canvas.height,
+      );
+    }
 
     // Create hidden textarea for input capture
     this.hiddenInput = this.createHiddenInput(block);
@@ -234,22 +248,36 @@ export class InlineEditor {
     const text = this.hiddenInput.value;
     const chars = block.chars;
 
-    // Clear the block area.
-    // bb.y may be at the baseline, so extend upward by fontSize to cover
-    // the ascender region.  Extra width accommodates inserted characters.
-    const pad = 6;
-    const ascent = block.fontSize;
+    // Restore the canvas snapshot first so neighbouring content is intact.
+    if (this.canvasSnapshot) {
+      ctx.putImageData(this.canvasSnapshot, 0, 0);
+    }
+
+    // Clear the block area with a small padding.
+    // The bounding box may have been expanded by the user via drag-to-resize,
+    // so we always use bb dimensions (which are larger than the text extent
+    // when manually widened).  Also add extra width for overflowing characters.
+    const pad = 4;
+    const extraW = Math.max(0, (text.length - chars.length)) * block.fontSize * 0.6;
+    const clearW = Math.max(bb.width, bb.width) + extraW;
     ctx.save();
     ctx.fillStyle = 'white';
     ctx.fillRect(
       bb.x - pad,
-      bb.y - ascent - pad,
-      bb.width + pad * 2 + ascent,
-      bb.height + ascent + pad * 2,
+      bb.y - pad,
+      clearW + pad * 2,
+      bb.height + pad * 2,
     );
 
-    // Draw each character
+    // Draw each character at its original position.
     ctx.textBaseline = 'alphabetic';
+
+    // Base position for new (empty) blocks — derive from bounding box.
+    const baseX = bb.x;
+    const baseY = bb.y + block.fontSize * 0.85;
+    const baseFontSize = block.fontSize || 16;
+    const baseColor = block.color;
+
     for (let i = 0; i < text.length; i++) {
       const c = text[i];
       if (!c) continue;
@@ -267,7 +295,7 @@ export class InlineEditor {
         y = ch.y;
         fontSize = ch.fontSize;
         [r, g, b] = ch.color;
-      } else {
+      } else if (chars.length > 0) {
         // Extra characters appended beyond original length
         const last = chars[chars.length - 1]!;
         fontSize = last.fontSize;
@@ -276,6 +304,14 @@ export class InlineEditor {
         ctx.font = `${fontSize}px sans-serif`;
         const preceding = text.substring(chars.length, i);
         x = last.x + last.width + ctx.measureText(preceding).width;
+      } else {
+        // Empty block (newly created) — position from bounding box
+        fontSize = baseFontSize;
+        y = baseY;
+        [r, g, b] = baseColor;
+        ctx.font = `${fontSize}px sans-serif`;
+        const preceding = text.substring(0, i);
+        x = baseX + ctx.measureText(preceding).width;
       }
 
       ctx.fillStyle = `rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)})`;
@@ -337,8 +373,30 @@ export class InlineEditor {
   private getCursorCanvasPos(
     charIndex: number,
   ): { x: number; y: number; height: number } {
-    const chars = this.currentBlock?.chars;
-    if (!chars || chars.length === 0) return { x: 0, y: 0, height: 16 };
+    const block = this.currentBlock;
+    if (!block) return { x: 0, y: 0, height: 16 };
+    const chars = block.chars;
+
+    // Empty block (newly created) — derive position from bounding box.
+    if (chars.length === 0) {
+      const bb = block.boundingBox;
+      const fontSize = block.fontSize || 16;
+      const baseX = bb.x;
+      const baseY = bb.y + fontSize * 0.85;
+      let xOffset = 0;
+      if (charIndex > 0 && this.hiddenInput) {
+        const ctx = this.canvas.getContext('2d');
+        if (ctx) {
+          ctx.font = `${fontSize}px sans-serif`;
+          xOffset = ctx.measureText(this.hiddenInput.value.substring(0, charIndex)).width;
+        }
+      }
+      return {
+        x: baseX + xOffset,
+        y: baseY - fontSize * 0.85,
+        height: fontSize,
+      };
+    }
 
     const refChar =
       charIndex < chars.length
@@ -414,11 +472,16 @@ export class InlineEditor {
   private cleanup(): void {
     this.stopCursorBlink();
     if (this.hiddenInput !== null) {
-      this.hiddenInput.remove();
-      this.hiddenInput = null;
+      // Detach the blur handler BEFORE removing the element to prevent
+      // re-entrant confirmEditing() calls (removing a focused element
+      // triggers blur, which would call confirmEditing again).
+      const input = this.hiddenInput;
+      this.hiddenInput = null; // clear first so blur guard sees null
+      try { input.remove(); } catch { /* already removed */ }
     }
     this.currentBlock = null;
     this.onComplete = null;
     this.savedCursorArea = null;
+    this.canvasSnapshot = null;
   }
 }

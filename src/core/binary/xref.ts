@@ -41,9 +41,8 @@ export interface PDFTrailer {
   info?: { objNum: number; genNum: number };
   /** /Prev — byte offset of the previous xref section (for incremental updates). */
   prev?: number;
-  /** /Encrypt dictionary (reserved for future use). */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  encrypt?: any;
+  /** /Encrypt indirect reference. */
+  encrypt?: { objNum: number; genNum: number };
   /** /ID array — two opaque byte strings. */
   id?: [Uint8Array, Uint8Array];
 }
