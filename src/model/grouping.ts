@@ -11,7 +11,7 @@
  *   3. detectWords    — insert synthetic space chars at word boundaries
  *   4. detectLines    — split char sequence into lines
  *   5. groupIntoBlocks — merge lines into blocks by vertical proximity
- *   6. splitByFont    — split blocks that contain multiple font names
+ *   6. splitByOperator — split blocks so each maps to exactly one Tj/TJ operator
  */
 
 import type { TextCharRaw } from '../core/content/stream.ts';
@@ -111,12 +111,15 @@ export class TextGrouper {
     const withSpaces = this.detectWords(sorted);
     const lines = this.detectLines(withSpaces);
     const blocks = this.groupIntoBlocks(lines);
-    // Note: splitByFont is intentionally NOT called here.
-    // Type3 subset fonts (common in CJK PDFs) assign a unique font name to
-    // each glyph subset.  Splitting by font in that situation would create
-    // one block per character, making editing impossible.  The save pipeline
-    // handles per-operator font lookup, so mixed-font blocks are safe.
-    return blocks;
+    // Split each block so that every resulting block maps to exactly one
+    // Tj/TJ operator.  This ensures that editing one block never shifts
+    // text in neighbouring operators, eliminating the cascade problem.
+    // Synthetic (word-boundary) spaces between operators are dropped
+    // during the split since they don't belong to any single operator.
+    const split = splitByOperator(blocks);
+    // Remove blocks that contain only whitespace — they are not editable
+    // and clutter the overlay display.
+    return split.filter(b => b.text.trim().length > 0);
   }
 
   // -------------------------------------------------------------------------
@@ -229,6 +232,7 @@ export class TextGrouper {
             color: [prev.color[0], prev.color[1], prev.color[2]],
             matrix: prev.matrix.slice(),
             operatorIndex: prev.operatorIndex,
+            synthetic: true,
           };
           result.push(syntheticSpace);
         }
@@ -392,5 +396,79 @@ function buildBlock(lines: TextChar[][]): TextBlock {
     color,
     lineBreaks,
   };
+}
+
+/** Build a TextBlock from a flat list of characters (no line-break tracking). */
+function buildBlockFromChars(chars: TextChar[]): TextBlock {
+  const id = nextTextBlockId();
+  const first = chars[0];
+  const fontName = first !== undefined ? first.fontName : '';
+  const fontSize = first !== undefined ? first.fontSize : 0;
+  const color: [number, number, number] =
+    first !== undefined
+      ? [first.color[0], first.color[1], first.color[2]]
+      : [0, 0, 0];
+
+  return {
+    id,
+    chars,
+    boundingBox: calculateBoundingBox(chars),
+    fontName,
+    fontSize,
+    text: extractText(chars),
+    editable: true,
+    modified: false,
+    color,
+    lineBreaks: [],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Step 6: Split blocks by operator
+// ---------------------------------------------------------------------------
+
+/**
+ * Split each TextBlock so that every resulting block contains characters
+ * from exactly one PDF content stream operator (identified by operatorIndex).
+ *
+ * Synthetic characters (word-boundary spaces inserted by detectWords) are
+ * dropped during the split because they sit at operator boundaries and do
+ * not belong to any single operator's content.
+ *
+ * This guarantees that editing one block only modifies one Tj/TJ operator,
+ * eliminating the cascade problem where changing text in one operator
+ * shifts text in neighbouring operators of the same (formerly merged) block.
+ */
+function splitByOperator(blocks: TextBlock[]): TextBlock[] {
+  const result: TextBlock[] = [];
+
+  for (const block of blocks) {
+    // Group non-synthetic chars by operatorIndex, preserving order.
+    const groups = new Map<number, TextChar[]>();
+    const order: number[] = [];
+
+    for (const ch of block.chars) {
+      if (ch.synthetic) continue; // drop synthetic spaces between operators
+
+      const opIdx = ch.operatorIndex;
+      let group = groups.get(opIdx);
+      if (group === undefined) {
+        group = [];
+        groups.set(opIdx, group);
+        order.push(opIdx);
+      }
+      group.push(ch);
+    }
+
+    // Create one block per operator group.
+    for (const opIdx of order) {
+      const chars = groups.get(opIdx)!;
+      if (chars.length > 0) {
+        result.push(buildBlockFromChars(chars));
+      }
+    }
+  }
+
+  return result;
 }
 

@@ -35,17 +35,9 @@ import type { ResolvedFont } from '../../core/font/manager';
  * modified TextBlock is replaced with a newly generated operator.  Unmodified
  * operators are returned by reference (no copy).
  *
- * Prefix/suffix alignment strategy:
- *   When a block spans multiple operators with different fonts (common with
- *   Type3 CJK subset fonts), a naive character-position mapping would assign
- *   characters to operators with incompatible fonts, causing garbled output.
- *
- *   Instead, we compare the old text (from block.chars) and the new text
- *   (block.text) to find the longest common prefix and suffix.  Operators
- *   that belong entirely to the unchanged prefix/suffix are kept verbatim.
- *   Only operators in the changed middle region are re-encoded, and the
- *   changed portion of the new text is distributed across those operators
- *   using each operator's original font.
+ * Each TextBlock is guaranteed to map to exactly one operator (enforced by
+ * the splitByOperator step in the grouping pipeline).  This makes the
+ * rebuild trivial: the block's entire new text replaces the single operator.
  *
  * @param operators       The original operator array from the content stream.
  * @param modifiedBlocks  Only the TextBlock objects whose `modified` flag is true.
@@ -56,126 +48,127 @@ export function rebuildTextOperators(
   modifiedBlocks: TextBlock[],
   fonts?: Map<string, ResolvedFont>,
 ): ContentOperator[] {
-  // Build per-operator replacement instructions from all modified blocks.
-  // `null` means "keep original raw bytes" (unchanged operator).
-  const operatorReplacements = new Map<number, { text: string; fontName: string } | null>();
+  // Map operator index → replacement text for each modified block.
+  const operatorReplacements = new Map<number, { text: string; fontName: string }>();
 
   for (const block of modifiedBlocks) {
-    // Build char → operator mapping from the original block characters.
-    const charOps = block.chars.map(ch => ({
-      opIndex: ch.operatorIndex,
-      fontName: ch.fontName,
-    }));
-
-    // Reconstruct original text from chars (matches what the user saw).
-    const oldChars = [...block.chars.map(ch => ch.char).join('')];
-    const newChars = [...block.text]; // split by code point
-
-    // Find longest common prefix.
-    let prefix = 0;
-    while (
-      prefix < oldChars.length &&
-      prefix < newChars.length &&
-      oldChars[prefix] === newChars[prefix]
-    ) {
-      prefix++;
-    }
-
-    // Find longest common suffix (not overlapping with prefix).
-    let suffix = 0;
-    while (
-      suffix < oldChars.length - prefix &&
-      suffix < newChars.length - prefix &&
-      oldChars[oldChars.length - 1 - suffix] === newChars[newChars.length - 1 - suffix]
-    ) {
-      suffix++;
-    }
-
-    const changedOldStart = prefix;
-    const changedOldEnd = oldChars.length - suffix;
-
-    // Collect the set of operator indices that are in the changed region.
-    const changedOpIndices = new Set<number>();
-    for (let i = changedOldStart; i < changedOldEnd; i++) {
-      if (i < charOps.length) {
-        changedOpIndices.add(charOps[i]!.opIndex);
+    // Collect all distinct operator indices in this block (excluding synthetic chars).
+    const opIndices: number[] = [];
+    const opFontNames = new Map<number, string>();
+    for (const ch of block.chars) {
+      if (ch.synthetic) continue;
+      if (!opFontNames.has(ch.operatorIndex)) {
+        opIndices.push(ch.operatorIndex);
+        opFontNames.set(ch.operatorIndex, ch.fontName);
       }
     }
-
-    // Mark prefix/suffix operators as "keep original" (null), unless they
-    // are also touched by the changed region (straddling a boundary).
-    for (let i = 0; i < prefix; i++) {
-      if (i < charOps.length) {
-        const opIdx = charOps[i]!.opIndex;
-        if (!changedOpIndices.has(opIdx)) {
-          operatorReplacements.set(opIdx, null);
-        }
-      }
-    }
-    for (let i = oldChars.length - suffix; i < oldChars.length; i++) {
-      if (i < charOps.length) {
-        const opIdx = charOps[i]!.opIndex;
-        if (!changedOpIndices.has(opIdx)) {
-          operatorReplacements.set(opIdx, null);
-        }
-      }
-    }
-
-    // Extract the changed portion of the new text.
-    const changedNewText = newChars.slice(prefix, newChars.length - suffix).join('');
-
-    // Collect per-operator info for the changed region, in stream order.
-    const opOrder: number[] = [];
-    const opInfo = new Map<number, { fontName: string; charCount: number }>();
-
-    for (let i = changedOldStart; i < changedOldEnd; i++) {
-      if (i >= charOps.length) continue;
-      const co = charOps[i]!;
-      let info = opInfo.get(co.opIndex);
-      if (info === undefined) {
-        info = { fontName: co.fontName, charCount: 0 };
-        opInfo.set(co.opIndex, info);
-        opOrder.push(co.opIndex);
-      }
-      info.charCount++;
-    }
+    if (opIndices.length === 0) continue;
 
     // Sort by stream order.
-    opOrder.sort((a, b) => a - b);
+    opIndices.sort((a, b) => a - b);
 
-    // Distribute the changed text across the changed operators.
-    const changedChars = [...changedNewText];
-    let pos = 0;
-
-    for (let i = 0; i < opOrder.length; i++) {
-      const opIdx = opOrder[i]!;
-      const info = opInfo.get(opIdx)!;
-      let slice: string;
-
-      if (i === opOrder.length - 1) {
-        // Last changed operator gets all remaining characters.
-        slice = changedChars.slice(pos).join('');
-      } else {
-        slice = changedChars.slice(pos, pos + info.charCount).join('');
-        pos += info.charCount;
-      }
-
-      operatorReplacements.set(opIdx, { text: slice, fontName: info.fontName });
+    // Assign the entire new text to the first operator.
+    // All other operators in this merged block become empty.
+    const firstOp = opIndices[0]!;
+    operatorReplacements.set(firstOp, {
+      text: block.text,
+      fontName: opFontNames.get(firstOp)!,
+    });
+    for (let i = 1; i < opIndices.length; i++) {
+      operatorReplacements.set(opIndices[i]!, {
+        text: '',
+        fontName: opFontNames.get(opIndices[i]!)!,
+      });
     }
   }
 
   return operators.map((op, index): ContentOperator => {
-    if (!operatorReplacements.has(index)) {
-      return op; // Not part of any modified block.
-    }
     const replacement = operatorReplacements.get(index);
-    if (replacement === null || replacement === undefined) {
-      return op; // Unchanged operator — keep original raw bytes.
+    if (replacement === undefined) {
+      return op; // Not modified — keep original raw bytes.
     }
 
     const font = fonts?.get(replacement.fontName);
     return generateTJOperator(replacement.text, 0, replacement.fontName, font);
   });
+}
+
+// ---------------------------------------------------------------------------
+// generateNewBlockOperators
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate a complete BT / Tf / Tm / Tj / ET operator sequence for a newly
+ * created TextBlock (one that has `isNew: true` and no pre-existing operators).
+ *
+ * The text matrix (Tm) positions the text at the block's bounding-box origin
+ * in **page coordinates** (PDF default: bottom-left origin, Y-up).  The caller
+ * must supply `pageHeight` and `scale` so canvas-space coordinates can be
+ * converted back to unscaled page coordinates.
+ *
+ * @param block       The new TextBlock.
+ * @param pageHeight  Height of the page in PDF points (unscaled).
+ * @param scale       Render scale factor (canvas px / PDF pt).
+ * @param fonts       Optional font map for proper char code encoding.
+ */
+export function generateNewBlockOperators(
+  block: TextBlock,
+  pageHeight: number,
+  scale: number,
+  fonts?: Map<string, ResolvedFont>,
+): ContentOperator[] {
+  const bb = block.boundingBox;
+  const fontSize = block.fontSize || 16;
+  const fontName = block.fontName || 'F1';
+
+  // Convert canvas-space coords → page-space coords.
+  // Canvas Y is top-down; PDF Y is bottom-up.
+  const pdfX = bb.x / scale;
+  // The baseline in canvas space is bb.y + fontSize * 0.85.
+  const baselineCanvasY = bb.y + fontSize * 0.85;
+  const pdfY = pageHeight - baselineCanvasY / scale;
+  const pdfFontSize = fontSize / scale;
+
+  // BT
+  const btOp = makeSyntheticOp('BT', []);
+
+  // /FontName fontSize Tf
+  const tfOp = makeSyntheticOp('Tf', [
+    { type: PDFObjectType.Name, value: fontName },
+    { type: PDFObjectType.Number, value: pdfFontSize },
+  ]);
+
+  // fontSize 0 0 fontSize x y Tm
+  const tmOp = makeSyntheticOp('Tm', [
+    { type: PDFObjectType.Number, value: pdfFontSize },
+    { type: PDFObjectType.Number, value: 0 },
+    { type: PDFObjectType.Number, value: 0 },
+    { type: PDFObjectType.Number, value: pdfFontSize },
+    { type: PDFObjectType.Number, value: pdfX },
+    { type: PDFObjectType.Number, value: pdfY },
+  ]);
+
+  // (text) Tj
+  const font = fonts?.get(fontName);
+  const tjOp = generateTJOperator(block.text, 0, fontName, font);
+
+  // ET
+  const etOp = makeSyntheticOp('ET', []);
+
+  return [btOp, tfOp, tmOp, tjOp, etOp];
+}
+
+/** Create a synthetic ContentOperator that is already serialized. */
+function makeSyntheticOp(name: string, operands: PDFObject[]): ContentOperator {
+  const op: ContentOperator = {
+    name,
+    operands,
+    raw: new Uint8Array(0),
+    offset: 0,
+    modified: true,
+  };
+  op.raw = serializeSingleOperator(op);
+  return op;
 }
 
 // ---------------------------------------------------------------------------
@@ -290,6 +283,11 @@ function encodeCIDText(text: string, font: ResolvedFont): Uint8Array {
       // Big-endian 2-byte encoding
       bytes.push((code >> 8) & 0xff);
       bytes.push(code & 0xff);
+    } else if (char === ' ') {
+      // Space fallback — most CID fonts support 0x0020 even when ToUnicode
+      // doesn't list it.  Without this, spaces are silently dropped.
+      bytes.push(0x00);
+      bytes.push(0x20);
     }
   }
   return new Uint8Array(bytes);
@@ -310,8 +308,13 @@ function encodeSimpleText(text: string, font: ResolvedFont): Uint8Array {
     const code = font.unicodeToCharCode(char);
     if (code !== null) {
       result.push(code & 0xff);
+    } else if (char === ' ') {
+      // Space fallback — 0x20 is the standard space code in virtually all
+      // PDF font encodings.  Without this, spaces are silently dropped when
+      // the ToUnicode CMap doesn't include a mapping for U+0020.
+      result.push(0x20);
     }
-    // Characters without a mapping are dropped — the font doesn't have the glyph.
+    // Other characters without a mapping are dropped — the font doesn't have the glyph.
   }
   return new Uint8Array(result);
 }
