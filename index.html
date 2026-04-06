@@ -8,32 +8,82 @@
 <body>
   <div id="app">
     <header id="toolbar">
-      <div class="toolbar-left">
-        <button id="btn-open" title="ファイルを開く">Open PDF</button>
+      <div class="toolbar-group">
+        <button id="btn-open" title="ファイルを開く (Ctrl+O)">
+          <span class="tb-icon">&#128194;</span><span class="tb-label">開く</span>
+        </button>
         <input type="file" id="file-input" accept=".pdf" hidden />
-        <button id="btn-save" title="保存" disabled>Save PDF</button>
-        <button id="btn-info" title="メタデータ" disabled>Info</button>
+        <button id="btn-save" title="保存 (Ctrl+S)" disabled>
+          <span class="tb-icon">&#128190;</span><span class="tb-label">保存</span>
+        </button>
       </div>
-      <div class="toolbar-center">
-        <button id="btn-zoom-out" title="縮小">-</button>
+
+      <span class="toolbar-sep"></span>
+
+      <div class="toolbar-group">
+        <button id="btn-undo" title="元に戻す (Ctrl+Z)" disabled>
+          <span class="tb-icon">&#x21A9;</span>
+        </button>
+        <button id="btn-redo" title="やり直し (Ctrl+Y)" disabled>
+          <span class="tb-icon">&#x21AA;</span>
+        </button>
+      </div>
+
+      <span class="toolbar-sep"></span>
+
+      <div class="toolbar-group">
+        <button id="btn-toggle-blocks" title="編集ブロック表示 (B)" disabled>
+          <span class="tb-icon">&#9638;</span><span class="tb-label">ブロック</span>
+        </button>
+        <button id="btn-add-text" title="テキスト追加 (T)" disabled>
+          <span class="tb-icon">T+</span><span class="tb-label">追加</span>
+        </button>
+        <button id="btn-merge" title="ブロック結合 (Shift+クリックで選択)" disabled>
+          <span class="tb-icon">&#x29D6;</span><span class="tb-label">結合</span>
+        </button>
+      </div>
+
+      <span class="toolbar-sep"></span>
+
+      <div class="toolbar-group">
+        <button id="btn-info" title="メタデータ / パスワード設定" disabled>
+          <span class="tb-icon">&#x2139;</span><span class="tb-label">情報</span>
+        </button>
+      </div>
+
+      <div class="toolbar-spacer"></div>
+
+      <div class="toolbar-group">
+        <button id="btn-zoom-out" title="縮小 (Ctrl+-)">&#x2212;</button>
         <span id="zoom-level">150%</span>
-        <button id="btn-zoom-in" title="拡大">+</button>
+        <button id="btn-zoom-in" title="拡大 (Ctrl++)">&#x002B;</button>
       </div>
-      <div class="toolbar-right">
-        <span id="page-info">Page - / -</span>
+
+      <span class="toolbar-sep"></span>
+
+      <div class="toolbar-group">
         <button id="btn-prev-page" title="前のページ" disabled>&lt;</button>
+        <span id="page-info">- / -</span>
         <button id="btn-next-page" title="次のページ" disabled>&gt;</button>
       </div>
     </header>
+
     <main id="editor-area">
       <div id="drop-zone">
-        <p>PDFファイルをドラッグ&ドロップ<br>またはクリックして選択</p>
+        <div class="drop-icon">&#128196;</div>
+        <p>PDFファイルをドラッグ&amp;ドロップ<br>またはクリックして選択</p>
       </div>
       <div id="canvas-container" hidden>
         <canvas id="pdf-canvas"></canvas>
         <div id="interaction-layer"></div>
       </div>
     </main>
+
+    <footer id="status-bar">
+      <span id="status-mode">選択モード</span>
+      <span id="status-info"></span>
+    </footer>
+
     <div id="metadata-modal">
       <div id="metadata-content"></div>
     </div>

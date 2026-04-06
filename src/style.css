@@ -14,47 +14,97 @@ body {
   height: 100vh;
 }
 
+/* ─── Toolbar ─────────────────────────────────────────────── */
+
 #toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 8px 16px;
+  padding: 4px 12px;
   background: #313244;
   border-bottom: 1px solid #45475a;
-  gap: 16px;
+  gap: 4px;
+  flex-shrink: 0;
+  min-height: 40px;
 }
 
-.toolbar-left, .toolbar-center, .toolbar-right {
+.toolbar-group {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
+}
+
+.toolbar-sep {
+  width: 1px;
+  height: 22px;
+  background: #585b70;
+  margin: 0 6px;
+  flex-shrink: 0;
+}
+
+.toolbar-spacer {
+  flex: 1;
 }
 
 #toolbar button {
-  padding: 6px 14px;
-  border: 1px solid #585b70;
-  border-radius: 6px;
-  background: #45475a;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
   color: #cdd6f4;
   cursor: pointer;
-  font-size: 13px;
-  transition: background 0.15s;
+  font-size: 12px;
+  line-height: 1.4;
+  transition: background 0.12s, border-color 0.12s;
+  white-space: nowrap;
 }
 
 #toolbar button:hover:not(:disabled) {
+  background: #45475a;
+  border-color: #585b70;
+}
+
+#toolbar button:active:not(:disabled) {
   background: #585b70;
 }
 
 #toolbar button:disabled {
-  opacity: 0.4;
+  opacity: 0.35;
   cursor: not-allowed;
 }
 
-#zoom-level, #page-info {
-  font-size: 13px;
-  min-width: 60px;
-  text-align: center;
+#toolbar button.active {
+  background: #1a73e8;
+  border-color: #1a73e8;
+  color: #fff;
 }
+
+#toolbar button.active:hover {
+  background: #1558b0;
+  border-color: #1558b0;
+}
+
+.tb-icon {
+  font-size: 14px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.tb-label {
+  font-size: 11px;
+}
+
+#zoom-level, #page-info {
+  font-size: 12px;
+  min-width: 50px;
+  text-align: center;
+  color: #a6adc8;
+  user-select: none;
+}
+
+/* ─── Editor area ─────────────────────────────────────────── */
 
 #editor-area {
   flex: 1;
@@ -83,8 +133,14 @@ body {
   background: rgba(137, 180, 250, 0.05);
 }
 
+.drop-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+  opacity: 0.5;
+}
+
 #drop-zone p {
-  font-size: 16px;
+  font-size: 15px;
   line-height: 1.6;
   color: #a6adc8;
 }
@@ -108,7 +164,45 @@ body {
   cursor: default;
 }
 
-/* Metadata modal */
+/* Editing-active highlight: a subtle glow around the canvas container */
+#canvas-container.editing {
+  box-shadow: 0 0 0 2px #1a73e8, 0 4px 24px rgba(0,0,0,0.3);
+}
+
+/* ─── Status bar ──────────────────────────────────────────── */
+
+#status-bar {
+  display: flex;
+  align-items: center;
+  padding: 3px 16px;
+  background: #181825;
+  border-top: 1px solid #313244;
+  font-size: 11px;
+  color: #6c7086;
+  gap: 16px;
+  flex-shrink: 0;
+  min-height: 24px;
+}
+
+#status-mode {
+  color: #a6adc8;
+  font-weight: 500;
+}
+
+#status-mode.mode-editing {
+  color: #1a73e8;
+}
+
+#status-mode.mode-addtext {
+  color: #f59e0b;
+}
+
+#status-info {
+  color: #6c7086;
+}
+
+/* ─── Metadata modal ──────────────────────────────────────── */
+
 #metadata-modal {
   display: none;
   position: fixed;
